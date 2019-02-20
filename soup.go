@@ -6,11 +6,14 @@ package soup
 
 import (
 	"bytes"
+	"crypto/tls"
 	"errors"
 	"io/ioutil"
 	"net/http"
+	"net/http/cookiejar"
 	"regexp"
 	"strings"
+	"time"
 
 	"golang.org/x/net/html"
 )
@@ -30,6 +33,17 @@ var Headers = make(map[string]string)
 // Cookies contains all HTTP cookies to send
 var Cookies = make(map[string]string)
 
+// Cookie Handling
+var gCurCookies []*http.Cookie
+var gCurCookieJar *cookiejar.Jar
+
+//do init before all others
+func initAll() {
+	gCurCookies = nil
+	//var err error;
+	gCurCookieJar, _ = cookiejar.New(nil)
+}
+
 // SetDebug sets the debug status
 // Setting this to true causes the panics to be thrown and logged onto the console.
 // Setting this to false causes the errors to be saved in the Error field in the returned struct.
@@ -42,6 +56,7 @@ func Header(n string, v string) {
 	Headers[n] = v
 }
 
+// Cookie sets a new HTTP Cookie
 func Cookie(n string, v string) {
 	Cookies[n] = v
 }
@@ -82,14 +97,97 @@ func GetWithClient(url string, client *http.Client) (string, error) {
 		}
 		return "", errors.New("unable to read the response body")
 	}
+
+	gCurCookies = gCurCookieJar.Cookies(req.URL)
+
+	return string(bytes), nil
+}
+
+// PostWithClient returns the HTML returned by the url using a provided HTTP client
+func PostWithClient(url string, data string, client *http.Client) (string, error) {
+
+	//http.NewRequest("POST", idpauthformsubmiturl, strings.NewReader(data.Encode()))
+	req, err := http.NewRequest("POST", url, strings.NewReader(data))
+	if err != nil {
+		if debug {
+			panic("Couldn't perform POST request to " + url)
+		}
+		return "", errors.New("couldn't perform GET request to " + url)
+	}
+	// Set headers
+	for hName, hValue := range Headers {
+		req.Header.Set(hName, hValue)
+	}
+	// Set cookies
+	for cName, cValue := range Cookies {
+		req.AddCookie(&http.Cookie{
+			Name:  cName,
+			Value: cValue,
+		})
+	}
+	// Perform request
+	resp, err := client.Do(req)
+	if err != nil {
+		if debug {
+			panic("Couldn't perform GET request to " + url)
+		}
+		return "", errors.New("couldn't perform GET request to " + url)
+	}
+	defer resp.Body.Close()
+	bytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		if debug {
+			panic("Unable to read the response body")
+		}
+		return "", errors.New("unable to read the response body")
+	}
+
+	// for _, cookie := range resp.Cookies() {
+	// 	fmt.Println("Found a cookie named:", cookie.Name)
+	// }
+
 	return string(bytes), nil
 }
 
 // Get returns the HTML returned by the url in string using the default HTTP client
 func Get(url string) (string, error) {
 	// Init a new HTTP client
-	client := &http.Client{}
+
+	tr := &http.Transport{
+		MaxIdleConns:       10,
+		IdleConnTimeout:    30 * time.Second,
+		DisableCompression: true,
+		TLSClientConfig:    &tls.Config{InsecureSkipVerify: false},
+	}
+
+	client := &http.Client{
+		Transport:     tr,
+		CheckRedirect: nil,
+		Jar:           gCurCookieJar,
+	}
+
 	return GetWithClient(url, client)
+}
+
+// Post returns the HTML returned by the url in string using the default HTTP client
+func Post(url string, data string) (string, error) {
+	// Init a new HTTP client
+	initAll()
+
+	tr := &http.Transport{
+		MaxIdleConns:       10,
+		IdleConnTimeout:    30 * time.Second,
+		DisableCompression: true,
+		TLSClientConfig:    &tls.Config{InsecureSkipVerify: false},
+	}
+
+	client := &http.Client{
+		Transport:     tr,
+		CheckRedirect: nil,
+		Jar:           gCurCookieJar,
+	}
+
+	return PostWithClient(url, data, client)
 }
 
 // HTMLParse parses the HTML returning a start pointer to the DOM
